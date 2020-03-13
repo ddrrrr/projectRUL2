@@ -10,28 +10,34 @@ class DIModel(nn.Module):
     def __init__(self):
         super(DIModel,self).__init__()
         self.encoder = nn.Sequential(
-            nn.Conv1d(2,16,65),
-            nn.ReLU(),
-            nn.MaxPool1d(4),
-            nn.Conv1d(16,32,3,1,1),
+            nn.Conv1d(2,32,3,1,1),
             nn.ReLU(),
             nn.MaxPool1d(4),
             nn.Conv1d(32,64,3,1,1),
             nn.ReLU(),
-            nn.MaxPool1d(4),    # b*64*39
+            nn.MaxPool1d(4),
+            nn.Conv1d(64,128,3,1,1),
+            nn.ReLU(),
+            nn.MaxPool1d(4),    # b*64*40
+            # nn.Conv1d(64,64,4),
+            # nn.ReLU(),
+            # nn.MaxPool1d(4)     # b*64*9
         )
         self.decoder = nn.Sequential(
-            nn.Conv1d(64,64,3,1,1),
+            nn.ConvTranspose1d(128,96,3,1,1),
             nn.ReLU(),
             nn.Upsample(scale_factor=2),
-            nn.Conv1d(64,32,3,1,1),
+            # nn.ConvTranspose1d(64,64,4),
+            # nn.ReLU(),
+            # nn.Upsample(scale_factor=4),
+            nn.ConvTranspose1d(96,64,3,1,1),
             nn.ReLU(),
             nn.Upsample(scale_factor=4),
-            nn.Conv1d(32,16,3,1,1),
+            nn.ConvTranspose1d(64,32,3,1,1),
             nn.ReLU(),
             nn.Upsample(scale_factor=4),
-            nn.ConvTranspose1d(16,2,65),
-            nn.Sigmoid(),
+            nn.ConvTranspose1d(32,2,3,1,1),
+            nn.ReLU(),
         )
 
     def forward(self, x_source, x_target):
@@ -44,9 +50,9 @@ class DIModel(nn.Module):
 class Process():
     def __init__(self):
         self.dataset = DataSet.load_dataset(name = 'phm_data')
-        self.lr = 0.001
-        self.epochs = 50
-        self.batches = 100
+        self.lr = 0.0002
+        self.epochs = 40
+        self.batches = 50
         self.batch_size = 64
         self.train_bearings = ['Bearing1_1','Bearing1_2','Bearing2_1','Bearing2_2','Bearing3_1','Bearing3_2']
         self.test_bearings = ['Bearing1_3','Bearing1_4','Bearing1_5','Bearing1_6','Bearing1_7',
@@ -79,6 +85,16 @@ class Process():
                 val_loss += self._evaluate(net,[test_source,test_target])
             print("[Epoch:%d][train_loss:%.4e][val_loss:%.4e]"
                 % (e,train_loss/self.batches,val_loss/self.batches))
+
+
+        # test
+        train_num = [self.batch_size//len(train_data)]*len(train_data)
+        for x in random.sample(range(0,len(train_data)),self.batch_size % len(train_data)):
+            train_num[x] += 1
+        train_idx = [np.random.randint(0,train_data[i].shape[0]-2,size=x) for i,x in enumerate(train_num)]
+        train_source = np.vstack([train_data[i][train_idx[i]] for i in range(len(train_idx))])
+        train_target = np.vstack([train_data[i][train_idx[i]+1] for i in range(len(train_idx))])
+        self._test(net,[train_source,train_target])
             
 
     def  _preprocess(self, select):
@@ -120,6 +136,16 @@ class Process():
         loss = torch.nn.functional.mse_loss(output,test_iter[1])
         torch.cuda.empty_cache()        #empty useless variable
         return loss.data.cpu().numpy()
+
+    def _test(self, model, test_iter):
+        model.eval()
+        target = test_iter[1]
+        for i in range(len(test_iter)):
+            test_iter[i] = Variable(torch.from_numpy(test_iter[i].copy()).type(torch.FloatTensor)).cuda() 
+        output = model(test_iter[0],test_iter[1])
+        output = output.data.cpu().numpy()
+        np.save("result.npy",output)
+        np.save("target.npy",target)
 
 if __name__ == "__main__":
     torch.backends.cudnn.enabled=False
