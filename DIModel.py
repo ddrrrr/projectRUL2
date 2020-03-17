@@ -10,33 +10,33 @@ class DIModel(nn.Module):
     def __init__(self):
         super(DIModel,self).__init__()
         self.encoder = nn.Sequential(
-            nn.Conv1d(2,32,3,1,1),
+            nn.Conv1d(2,64,65),
             nn.ReLU(),
-            nn.MaxPool1d(4),
-            nn.Conv1d(32,64,3,1,1),
+            nn.MaxPool1d(2),
+            nn.Conv1d(64,64,5,1,2),
             nn.ReLU(),
-            nn.MaxPool1d(4),
+            nn.MaxPool1d(2),
             nn.Conv1d(64,128,3,1,1),
             nn.ReLU(),
             nn.MaxPool1d(4),    # b*64*40
-            # nn.Conv1d(64,64,4),
-            # nn.ReLU(),
-            # nn.MaxPool1d(4)     # b*64*9
+            nn.Conv1d(128,128,3,1,1),
+            nn.ReLU(),
+            nn.MaxPool1d(4)     # b*64*9
         )
         self.decoder = nn.Sequential(
             nn.ConvTranspose1d(128,96,3,1,1),
             nn.ReLU(),
+            nn.Upsample(scale_factor=4),
+            nn.ConvTranspose1d(96,96,3,1,1),
+            nn.ReLU(),
             nn.Upsample(scale_factor=2),
-            # nn.ConvTranspose1d(64,64,4),
-            # nn.ReLU(),
-            # nn.Upsample(scale_factor=4),
             nn.ConvTranspose1d(96,64,3,1,1),
             nn.ReLU(),
-            nn.Upsample(scale_factor=4),
-            nn.ConvTranspose1d(64,32,3,1,1),
+            nn.Upsample(scale_factor=2),
+            nn.ConvTranspose1d(64,64,5,1,2),
             nn.ReLU(),
-            nn.Upsample(scale_factor=4),
-            nn.ConvTranspose1d(32,2,3,1,1),
+            nn.Upsample(scale_factor=2),
+            nn.ConvTranspose1d(64,2,65),
             nn.ReLU(),
         )
 
@@ -50,8 +50,8 @@ class DIModel(nn.Module):
 class Process():
     def __init__(self):
         self.dataset = DataSet.load_dataset(name = 'phm_data')
-        self.lr = 0.0002
-        self.epochs = 40
+        self.lr = 0.001
+        self.epochs = 50
         self.batches = 50
         self.batch_size = 64
         self.train_bearings = ['Bearing1_1','Bearing1_2','Bearing2_1','Bearing2_2','Bearing3_1','Bearing3_2']
@@ -105,10 +105,13 @@ class Process():
         else:
             raise ValueError('error selection for features!')
 
+
         for i,x in enumerate(temp_data):
             temp_one_data = x.transpose(0,2,1)
-            temp_one_data = (temp_one_data - np.repeat(np.min(temp_one_data, axis=2, keepdims=True),2560,axis=2)) \
-                / np.repeat((np.max(temp_one_data,axis=2,keepdims=True) - np.min(temp_one_data,axis=2,keepdims=True)),2560,axis=2)
+            temp_one_data = self._fft(temp_one_data)
+            length_data = temp_one_data.shape[2]
+            temp_one_data = (temp_one_data - np.repeat(np.min(temp_one_data, axis=2, keepdims=True),length_data,axis=2)) \
+                / np.repeat((np.max(temp_one_data,axis=2,keepdims=True) - np.min(temp_one_data,axis=2,keepdims=True)),length_data,axis=2)
 
             temp_data[i] = temp_one_data
 
@@ -146,6 +149,12 @@ class Process():
         output = output.data.cpu().numpy()
         np.save("result.npy",output)
         np.save("target.npy",target)
+
+    def _fft(self, data):
+        fft_data = np.fft.fft(data,axis=2)/data.shape[2]
+        fft_data = (np.abs(fft_data))**2
+        fft_data = fft_data[:,:,1:1281]
+        return fft_data
 
 if __name__ == "__main__":
     torch.backends.cudnn.enabled=False
