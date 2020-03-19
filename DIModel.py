@@ -10,32 +10,44 @@ class DIModel(nn.Module):
     def __init__(self):
         super(DIModel,self).__init__()
         self.encoder = nn.Sequential(
-            nn.Conv1d(2,64,65),
+            nn.Conv1d(2,8,65),
+            nn.ReLU(),
+            nn.MaxPool1d(4),
+            nn.Conv1d(8,12,33),
+            nn.ReLU(),
+            nn.MaxPool1d(4),
+            # nn.Conv1d(96,128,17),
+            # nn.ReLU(),
+            # nn.MaxPool1d(4),
+            nn.Conv1d(12,16,5,1,2),
             nn.ReLU(),
             nn.MaxPool1d(2),
-            nn.Conv1d(64,64,5,1,2),
+            nn.Conv1d(16,16,3,1,1),
             nn.ReLU(),
-            nn.MaxPool1d(2),
-            nn.Conv1d(64,128,3,1,1),
-            nn.ReLU(),
-            nn.MaxPool1d(4),    # b*64*40
-            nn.Conv1d(128,128,3,1,1),
-            nn.ReLU(),
-            nn.MaxPool1d(4)     # b*64*9
+            nn.MaxPool1d(2),    # b*32*17
+            # nn.Conv1d(64,128,3,1,1),
+            # nn.ReLU(),
+            # nn.MaxPool1d(4),    # b*64*40
+            # nn.Conv1d(128,128,3,1,1),
+            # nn.ReLU(),
+            # nn.MaxPool1d(4)     # b*64*9
         )
         self.decoder = nn.Sequential(
-            nn.ConvTranspose1d(128,96,3,1,1),
+            nn.Conv1d(16,128,3,1,1),
+            nn.ReLU(),
+            nn.Upsample(scale_factor=2),
+            nn.ConvTranspose1d(128,96,5,1,2),
+            nn.ReLU(),
+            nn.Upsample(scale_factor=2),
+            nn.ConvTranspose1d(96,64,5,1,2),
+            nn.ReLU(),
+            nn.Upsample(scale_factor=2),
+            nn.ConvTranspose1d(64,64,33),
             nn.ReLU(),
             nn.Upsample(scale_factor=4),
-            nn.ConvTranspose1d(96,96,3,1,1),
-            nn.ReLU(),
-            nn.Upsample(scale_factor=2),
-            nn.ConvTranspose1d(96,64,3,1,1),
-            nn.ReLU(),
-            nn.Upsample(scale_factor=2),
-            nn.ConvTranspose1d(64,64,5,1,2),
-            nn.ReLU(),
-            nn.Upsample(scale_factor=2),
+            # nn.ConvTranspose1d(64,64,5,1,2),
+            # nn.ReLU(),
+            # nn.Upsample(scale_factor=2),
             nn.ConvTranspose1d(64,2,65),
             nn.ReLU(),
         )
@@ -50,7 +62,7 @@ class DIModel(nn.Module):
 class Process():
     def __init__(self):
         self.dataset = DataSet.load_dataset(name = 'phm_data')
-        self.lr = 0.001
+        self.lr = 0.00005
         self.epochs = 50
         self.batches = 50
         self.batch_size = 64
@@ -95,6 +107,8 @@ class Process():
         train_source = np.vstack([train_data[i][train_idx[i]] for i in range(len(train_idx))])
         train_target = np.vstack([train_data[i][train_idx[i]+1] for i in range(len(train_idx))])
         self._test(net,[train_source,train_target])
+
+        self.save_model(net.encoder,"0319encoder")
             
 
     def  _preprocess(self, select):
@@ -155,6 +169,12 @@ class Process():
         fft_data = (np.abs(fft_data))**2
         fft_data = fft_data[:,:,1:1281]
         return fft_data
+
+    def save_model(self, model,name):
+        # 保存
+        torch.save(model, name + '.pkl')
+        # # 加载
+        # model = torch.load('\model.pkl')
 
 if __name__ == "__main__":
     torch.backends.cudnn.enabled=False
