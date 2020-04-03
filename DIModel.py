@@ -6,10 +6,10 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 from dataset import DataSet
 
-class DIModel(nn.Module):
+class Encoder(nn.Module):
     def __init__(self):
-        super(DIModel,self).__init__()
-        self.encoder = nn.Sequential(
+        super(Encoder,self).__init__()
+        self.CNN = nn.Sequential(
             nn.Conv1d(2,8,65),
             nn.ReLU(),
             nn.MaxPool1d(4),
@@ -25,14 +25,28 @@ class DIModel(nn.Module):
             nn.Conv1d(16,16,3,1,1),
             nn.ReLU(),
             nn.MaxPool1d(2),    # b*32*17
-            # nn.Conv1d(64,128,3,1,1),
-            # nn.ReLU(),
-            # nn.MaxPool1d(4),    # b*64*40
-            # nn.Conv1d(128,128,3,1,1),
-            # nn.ReLU(),
-            # nn.MaxPool1d(4)     # b*64*9
         )
-        self.decoder = nn.Sequential(
+        self.FC = nn.Sequential(
+            nn.Linear(17*16,128),
+            nn.ReLU(),
+            nn.Linear(128,64)
+        )
+
+    def forward(self, x):
+        x = self.CNN(x)
+        x = x.view(x.size(0),-1)
+        out = self.FC(x)
+        return out
+
+class Decoder(nn.Module):
+    def __init__(self):
+        super(Decoder,self).__init__()
+        self.FC = nn.Sequential(
+            nn.Linear(128,256),
+            nn.ReLU(),
+            nn.Linear(256,34*16),
+        )
+        self.CNN = nn.Sequential(
             nn.Conv1d(16,128,3,1,1),
             nn.ReLU(),
             nn.Upsample(scale_factor=2),
@@ -53,10 +67,25 @@ class DIModel(nn.Module):
         )
 
     def forward(self, x_source, x_target):
+        x_c = torch.cat([x_source, x_target], 1)
+        x_c = self.FC(x_c)
+        x_c = x_c.view(x_c.size(0),16,34)
+        out = self.CNN(x_c)
+        return out
+
+
+class DIModel(nn.Module):
+    def __init__(self):
+        super(DIModel,self).__init__()
+        self.encoder = Encoder()
+        self.decoder = Decoder()
+
+    def forward(self, x_source, x_target):
         x_s = self.encoder(x_source)
+
         x_t = self.encoder(x_target)
-        x_c = torch.cat([x_s, x_t], 2)
-        out = self.decoder(x_c)
+
+        out = self.decoder(x_s, x_t)
         return out
 
 class Process():
@@ -170,7 +199,7 @@ class Process():
         fft_data = fft_data[:,:,1:1281]
         return fft_data
 
-    def save_model(self, model,name):
+    def save_model(self, model, name):
         # 保存
         torch.save(model, name + '.pkl')
         # # 加载
