@@ -2,3 +2,7 @@ refrence/1707.01495.pdf
 result.npy
 target.npy
 0319encoder.pkl
+test.pkl
+__pycache__/dataset.cpython-37.pyc
+__pycache__/DIModel.cpython-37.pyc
+refrence/qian2014.pdf
