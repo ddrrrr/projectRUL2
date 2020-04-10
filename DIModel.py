@@ -112,9 +112,18 @@ class Process():
                 train_num = [self.batch_size//len(train_data)]*len(train_data)
                 for x in random.sample(range(0,len(train_data)),self.batch_size % len(train_data)):
                     train_num[x] += 1
-                train_idx = [np.random.randint(0,train_data[i].shape[0]-2,size=x) for i,x in enumerate(train_num)]
+                train_idx = []
+                train_idx_p = []
+                for i,x in enumerate(train_num):
+                    append_idx = np.random.randint(0,train_data[i].shape[0]-2,size=x)
+                    train_idx.append(append_idx)
+                    max_zhishu = int(min(np.floor(np.log2(train_data[i].shape[0] - np.max(append_idx) - 1)) , 6))
+                    append_zhishu = np.random.randint(0,max_zhishu,size=x)
+                    append_idx_p = append_idx + np.power(2,append_zhishu)
+                    train_idx_p.append(append_idx_p)
+
                 train_source = np.vstack([train_data[i][train_idx[i]] for i in range(len(train_idx))])
-                train_target = np.vstack([train_data[i][train_idx[i]+1] for i in range(len(train_idx))])
+                train_target = np.vstack([train_data[i][train_idx_p[i]] for i in range(len(train_idx_p))])
                 train_loss += self._fit(net,optimizer,[train_source,train_target])
 
                 test_num = [self.batch_size//len(test_data)]*len(test_data)
@@ -132,9 +141,19 @@ class Process():
         train_num = [self.batch_size//len(train_data)]*len(train_data)
         for x in random.sample(range(0,len(train_data)),self.batch_size % len(train_data)):
             train_num[x] += 1
-        train_idx = [np.random.randint(0,train_data[i].shape[0]-2,size=x) for i,x in enumerate(train_num)]
+
+        train_idx = []
+        train_idx_p = []
+        for i,x in enumerate(train_num):
+            append_idx = np.random.randint(0,train_data[i].shape[0]-2,size=x)
+            train_idx.append(append_idx)
+            max_zhishu = int(min(np.floor(np.log2(train_data[i].shape[0] - np.max(append_idx) - 1)) , 6))
+            append_zhishu = np.random.randint(0,max_zhishu,size=x)
+            append_idx_p = append_idx + np.power(2,append_zhishu)
+            train_idx_p.append(append_idx_p)
+        
         train_source = np.vstack([train_data[i][train_idx[i]] for i in range(len(train_idx))])
-        train_target = np.vstack([train_data[i][train_idx[i]+1] for i in range(len(train_idx))])
+        train_target = np.vstack([train_data[i][train_idx_p[i]] for i in range(len(train_idx))])
         self._test(net,[train_source,train_target])
 
         self.save_model(net.encoder,"0319encoder")
