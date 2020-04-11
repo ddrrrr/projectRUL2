@@ -26,7 +26,7 @@ class DataSet(object):
             save_path: A string described where to save or load this dataset, and defaulted as './data/'
             dataset: A list contained samples and their attributes.
     '''
-    def __init__(self,name='',index=[],save_path='./data/',dataset=[]):
+    def __init__(self,name='',index=[],save_path='../data/',dataset=[]):
         self.name = name
         self.index = index
         self.save_path = save_path
