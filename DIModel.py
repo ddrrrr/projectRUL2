@@ -1,3 +1,4 @@
+import datetime
 import numpy as np 
 import random
 import torch
@@ -156,7 +157,7 @@ class Process():
         train_target = np.vstack([train_data[i][train_idx_p[i]] for i in range(len(train_idx))])
         self._test(net,[train_source,train_target])
 
-        self.save_model(net.encoder,"0319encoder")
+        self.save_model(net.encoder,datetime.datetime.now().strftime("%Y%m%d") + "encoder")
             
 
     def  _preprocess(self, select):
