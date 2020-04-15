@@ -5,32 +5,52 @@ import torch
 from torch import nn, optim
 from torch.autograd import Variable
 import torch.nn.functional as F
+from collections import OrderedDict
 from dataset import DataSet
+
+class ResBlock(nn.Module):
+    expansion = 1
+    def __init__(self, inplanes, planes, kernel_size=3, stride=1, padding=1):
+        super(ResBlock, self).__init__()
+        m = OrderedDict()
+        m['conv1'] = nn.Conv1d(inplanes, planes, kernel_size=kernel_size, stride=stride, padding=padding, bias=False)
+        m['relu1'] = nn.ReLU(inplace=True)
+        self.group1 = nn.Sequential(m)
+
+        self.relu= nn.Sequential(nn.ReLU(inplace=True))
+
+    def forward(self, x):
+        residual = x
+        out = self.group1(x) + residual
+        out = self.relu(out)
+        return out
 
 class Encoder(nn.Module):
     def __init__(self):
         super(Encoder,self).__init__()
         self.CNN = nn.Sequential(
-            nn.Conv1d(2,8,65),
+            nn.Conv1d(2,32,65),
             nn.ReLU(),
             nn.MaxPool1d(4),
-            nn.Conv1d(8,12,33),
+            nn.Conv1d(32,64,33),
             nn.ReLU(),
             nn.MaxPool1d(4),
             # nn.Conv1d(96,128,17),
             # nn.ReLU(),
             # nn.MaxPool1d(4),
-            nn.Conv1d(12,16,5,1,2),
-            nn.ReLU(),
+            # nn.Conv1d(64,64,5,1,2),
+            # nn.ReLU(),
+            ResBlock(64,64,5,1,2),
             nn.MaxPool1d(2),
-            nn.Conv1d(16,16,3,1,1),
-            nn.ReLU(),
-            nn.MaxPool1d(2),    # b*32*17
+            # nn.Conv1d(64,64,3,1,1),
+            # nn.ReLU(),
+            ResBlock(64,64),
+            nn.MaxPool1d(2),    # b*64*17
         )
         self.FC = nn.Sequential(
-            nn.Linear(17*16,128),
+            nn.Linear(17*64,256),
             nn.ReLU(),
-            nn.Linear(128,64)
+            nn.Linear(256,64)
         )
 
     def forward(self, x):
@@ -43,18 +63,23 @@ class Decoder(nn.Module):
     def __init__(self):
         super(Decoder,self).__init__()
         self.FC = nn.Sequential(
-            nn.Linear(128,256),
+            nn.Linear(64*2,512),
             nn.ReLU(),
-            nn.Linear(256,34*16),
+            nn.Linear(512,34*64),
         )
         self.CNN = nn.Sequential(
-            nn.Conv1d(16,128,3,1,1),
+            nn.Conv1d(64,128,1),
+            ResBlock(128,128),
             nn.ReLU(),
             nn.Upsample(scale_factor=2),
-            nn.ConvTranspose1d(128,96,5,1,2),
+            nn.Conv1d(128,96,1),
+            ResBlock(96,96),
+            # nn.ConvTranspose1d(128,96,5,1,2),
             nn.ReLU(),
             nn.Upsample(scale_factor=2),
-            nn.ConvTranspose1d(96,64,5,1,2),
+            nn.Conv1d(96,64,1),
+            ResBlock(64,64),
+            # nn.ConvTranspose1d(96,64,5,1,2),
             nn.ReLU(),
             nn.Upsample(scale_factor=2),
             nn.ConvTranspose1d(64,64,33),
@@ -70,7 +95,7 @@ class Decoder(nn.Module):
     def forward(self, x_source, x_target):
         x_c = torch.cat([x_source, x_target], 1)
         x_c = self.FC(x_c)
-        x_c = x_c.view(x_c.size(0),16,34)
+        x_c = x_c.view(x_c.size(0),64,34)
         out = self.CNN(x_c)
         return out
 
@@ -92,10 +117,10 @@ class DIModel(nn.Module):
 class Process():
     def __init__(self):
         self.dataset = DataSet.load_dataset(name = 'phm_data')
-        self.lr = 0.00005
+        self.lr = 0.0001
         self.epochs = 50
         self.batches = 50
-        self.batch_size = 64
+        self.batch_size = 128
         self.train_bearings = ['Bearing1_1','Bearing1_2','Bearing2_1','Bearing2_2','Bearing3_1','Bearing3_2']
         self.test_bearings = ['Bearing1_3','Bearing1_4','Bearing1_5','Bearing1_6','Bearing1_7',
                                 'Bearing2_3','Bearing2_4','Bearing2_5','Bearing2_6','Bearing2_7',
