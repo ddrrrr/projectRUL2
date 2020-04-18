@@ -16,12 +16,12 @@ class BiLSTM(nn.Module):
         self.hidden_size = hidden_size
         self.rnn = nn.LSTM(in_size,hidden_size,n_layers,bidirectional=True)
         self.state_predict = nn.Sequential(
-            nn.Linear(hidden_size*2,1),
+            nn.Linear(hidden_size*2,3),
             nn.Sigmoid()
         )
         self.rul_predict = nn.Sequential(
             nn.Linear(hidden_size*2,2),
-            nn.PReLU()
+            nn.ReLU()
         )
 
     def forward(self, x, seq_len=None):
@@ -31,8 +31,9 @@ class BiLSTM(nn.Module):
         x = nn.MaxPool1d(7*32)(x)
         x = x.view(x.size(0),x.size(1)) # size: (b,hidden_size*2)
         state = self.state_predict(x)
-        rul = self.rul_predict(x)
-        output = torch.cat([state,rul],dim=1)
+        # rul = self.rul_predict(x)
+        # output = torch.cat([state,rul],dim=1)
+        output = state
 
         return output
 
@@ -45,7 +46,8 @@ class RULProdict():
         self.optimizer = optim.Adam
         self.max_data_len = 32*7
         self.feature_size = 64
-        self.network = BiLSTM(self.feature_size,self.hidden_size).cuda()
+        self.position_encoding_size = 8
+        self.network = BiLSTM(self.feature_size + self.position_encoding_size,self.hidden_size).cuda()
 
     def _preprocess(self, dataset, select):
         if select == 'train':
@@ -114,12 +116,22 @@ class RULProdict():
 
             temp_one_feature_list = []
             for j in range(temp_one_data.shape[0]//64):
-                temp_one_feature_list.append(feature_net(temp_one_data[j:min(j+64,temp_one_data.shape[0]-1)]).data.cpu().numpy())
+                temp_one_feature_list.append(feature_net(temp_one_data[j*64:min(j*64+64,temp_one_data.shape[0]-1)]).data.cpu().numpy())
             
             temp_one_feature = np.vstack(temp_one_feature_list)
+            temp_one_feature = self._position_encoding(temp_one_feature)
             feature_dataset.append([bearing_name[i],temp_one_feature,state,posibility,rul])
 
         feature_dataset.save()
+
+    def _position_encoding(self, data):
+        pe = np.zeros([data.shape[0], self.position_encoding_size])
+        position = np.arange(0, data.shape[0]).reshape([-1,1])
+        div_term = np.exp(np.arange(0, self.position_encoding_size, 2) *
+                             -(np.log(10000.0) / self.position_encoding_size))
+        pe[:, 0::2] = np.sin(position * div_term)
+        pe[:, 1::2] = np.cos(position * div_term)
+        return np.concatenate([data,pe],axis=1)
 
     def Begin(self):
         dataset = DataSet.load_dataset("phm_feature")
@@ -157,7 +169,7 @@ class RULProdict():
                 for j in range(min(self.batch_size,x.shape[0]-i)):
                     one_feed_data = self._get_one_feed_data(x,i+j)
                     one_feed_data = np.reshape(one_feed_data,[one_feed_data.shape[0],1,-1])
-                    one_feed_data = np.concatenate([one_feed_data,np.zeros([self.max_data_len - one_feed_data.shape[0], 1, self.feature_size])],axis=0)
+                    one_feed_data = np.concatenate([one_feed_data,np.zeros([self.max_data_len - one_feed_data.shape[0], 1, self.feature_size + self.position_encoding_size])],axis=0)
                     batch_data_list.append(one_feed_data)
 
                 batch_data = np.concatenate(batch_data_list,axis=1)
@@ -201,7 +213,7 @@ class RULProdict():
             for one_len in random_len:
                 one_feed_data = self._get_one_feed_data(train_iter[0][i],one_len)
                 one_feed_data = np.reshape(one_feed_data,[one_feed_data.shape[0],1,-1])
-                one_feed_data = np.concatenate([one_feed_data,np.zeros([self.max_data_len - one_feed_data.shape[0], 1, self.feature_size])],axis=0)
+                one_feed_data = np.concatenate([one_feed_data,np.zeros([self.max_data_len - one_feed_data.shape[0], 1, self.feature_size + self.position_encoding_size])],axis=0)
                 batch_data.append(one_feed_data)
                 batch_state.append(train_iter[1][i][one_len])
                 batch_posibility.append(train_iter[2][i][one_len])
@@ -251,7 +263,7 @@ class RULProdict():
             for one_len in random_len:
                 one_feed_data = self._get_one_feed_data(test_iter[0][i],one_len)
                 one_feed_data = np.reshape(one_feed_data,[one_feed_data.shape[0],1,-1])
-                one_feed_data = np.concatenate([one_feed_data,np.zeros([self.max_data_len - one_feed_data.shape[0], 1, self.feature_size])])
+                one_feed_data = np.concatenate([one_feed_data,np.zeros([self.max_data_len - one_feed_data.shape[0], 1, self.feature_size + self.position_encoding_size])])
                 batch_data.append(one_feed_data)
                 batch_state.append(test_iter[1][i][one_len])
                 batch_posibility.append(test_iter[2][i][one_len])
