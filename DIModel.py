@@ -50,7 +50,8 @@ class Encoder(nn.Module):
         self.FC = nn.Sequential(
             nn.Linear(17*64,256),
             nn.ReLU(),
-            nn.Linear(256,64)
+            nn.Linear(256,64),
+            nn.Tanh()
         )
 
     def forward(self, x):
