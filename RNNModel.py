@@ -67,7 +67,7 @@ class RULProdict():
         output = [data,state,posibility,rul]
         return output
 
-    def _GenHealthLabel(self, data):
+    def _GenHealthLabel(self, data, rul=0):
         temp_one_data = data
         length = temp_one_data.shape[2]
 
@@ -81,12 +81,12 @@ class RULProdict():
         temp_std = np.std(temp_one_data[:time_len//2,:],axis=0)
 
         temp_healthlabel = np.zeros(temp_one_data.shape)
-        temp_healthlabel[temp_one_data>(temp_mean+3*temp_std)] = 1
+        temp_healthlabel[temp_one_data>(temp_mean+2.5*temp_std)] = 1
         temp_posibility = np.mean(temp_healthlabel, axis=1)
         temp_healthlabel = np.max(temp_healthlabel, axis=1)
-        temp_rul = np.arange(temp_one_data.shape[0])[::-1]
+        temp_rul = np.arange(temp_one_data.shape[0])[::-1] + rul
         temp_rul[temp_healthlabel==0] = -1
-        temp_rul = np.sin(temp_rul * np.pi / 2 / 10000)
+        temp_rul = np.sin(temp_rul * np.pi / 2 / 5000)
 
         return temp_one_data ,temp_healthlabel, temp_posibility, temp_rul
 
@@ -100,6 +100,7 @@ class RULProdict():
         bearing_dataset = DataSet.load_dataset('phm_data')
         bearing_data = bearing_dataset.get_value('data')
         bearing_name = bearing_dataset.get_value('bearing_name')
+        bearing_rul = bearing_dataset.get_value('RUL')
 
         feature_net = torch.load(model_name + '.pkl')
         feature_net.eval()
@@ -107,7 +108,7 @@ class RULProdict():
 
         for i in range(len(bearing_data)):
             temp_one_data = bearing_data[i].transpose(0,2,1)
-            _,state,posibility,rul = self._GenHealthLabel(temp_one_data)
+            _,state,posibility,rul = self._GenHealthLabel(temp_one_data,bearing_rul[i])
             temp_one_data = self._fft(temp_one_data)
             length_data = temp_one_data.shape[2]
             temp_one_data = (temp_one_data - np.repeat(np.min(temp_one_data, axis=2, keepdims=True),length_data,axis=2)) \
@@ -140,20 +141,24 @@ class RULProdict():
         optimizer = self.optimizer(self.network.parameters(),lr=self.lr)
 
         log = OrderedDict()
-        log['train_loss'] = []
-        log['val_loss'] = []
+        log['train_state_loss'] = []
+        log['train_rul_loss'] = []
+        log['val_state_loss'] = []
+        log['val_rul_loss'] = []
 
         for e in range(1,self.epochs+1):
             train_loss = self._fit(train_iter,optimizer)
             val_loss = self._evaluate(test_iter)
 
-            print("[Epoch:%d][train_loss:%.4e][val_loss:%.4e]"
-                % (e,train_loss,val_loss))
-            log['train_loss'].append(float(train_loss))
-            log['val_loss'].append(float(val_loss))
+            print("[Epoch:%d][train_state_loss:%.4e][train_rul_loss:%.4e][val_state_loss:%.4e][val_rul_loss:%.4e]"
+                % (e,train_loss[0],train_loss[1],val_loss[0],val_loss[1]))
+            log['train_state_loss'].append(float(train_loss[0]))
+            log['train_rul_loss'].append(float(train_loss[1]))
+            log['val_state_loss'].append(float(val_loss[0]))
+            log['val_rul_loss'].append(float(val_loss[1]))
             pd.DataFrame(log).to_csv('./model/log.csv',index=False)
-            if float(val_loss) == min(log['train_loss']):
-                torch.save(self.network, './model/rul_model')
+            # if float(val_loss) == min(log['train_loss']):
+            #     torch.save(self.network, './model/rul_model')
             torch.save(self.network, './model/newest_rul_model')
 
     def test_all(self):
@@ -241,10 +246,10 @@ class RULProdict():
 
         optimizer.zero_grad()
         output = self.network(batch_data,batch_sequence_len)
-        loss = self._custom_loss(output, batch_state, batch_posibility, batch_rul)
+        loss, state_loss, rul_loss = self._custom_loss(output, batch_state, batch_posibility, batch_rul)
         loss.backward()
         optimizer.step()
-        return loss.data
+        return state_loss.data, rul_loss.data
 
     def _evaluate(self, test_iter):
         self.network.eval()
@@ -281,20 +286,21 @@ class RULProdict():
         batch_rul = Variable(torch.from_numpy(batch_rul).type(torch.FloatTensor)).cuda()
 
         output = self.network(batch_data, batch_sequence_len)
-        loss = self._custom_loss(output, batch_state, batch_posibility, batch_rul)
-        return loss.data
+        loss, state_loss, rul_loss = self._custom_loss(output, batch_state, batch_posibility, batch_rul)
+        return state_loss.data, rul_loss.data
 
     def _custom_loss(self,output, batch_state, batch_posibility, batch_rul):
         state_loss = nn.functional.binary_cross_entropy(output[:,0].view(-1),batch_state)
         predict_rul = (output[:,1]*output[:,2]).view(-1) + (1-output[:,1]).view(-1)*batch_rul
-        rul_loss = torch.sum(((predict_rul-batch_rul)**2) * output[:,0].view(-1)) / torch.sum(output[:,0])
+        rul_loss = torch.sum(((predict_rul-batch_rul)**2) * batch_state) / torch.sum(batch_state)
         posibility_loss = torch.mean(-torch.log(output[:,1]))
-        return state_loss + rul_loss + posibility_loss
+        all_loss = state_loss + rul_loss + posibility_loss
+        return all_loss, state_loss, rul_loss
 
 
 if __name__ == "__main__":
     torch.backends.cudnn.enabled=False
     p = RULProdict()
-    # p._GenFeature('20200413encoder')
+    p._GenFeature('20200413encoder')
     p.Begin()
     p.test_all()
