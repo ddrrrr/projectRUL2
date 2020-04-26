@@ -28,17 +28,18 @@ class Attention(nn.Module):
             nn.Linear(self.out_size,self.out_size),
             nn.ReLU(),
             nn.Linear(self.out_size,self.out_size),
-            nn.Dropout(0.5)
+            nn.Dropout(0.3)
         )
 
     def forward(self, x):
         x = x.transpose(0,1)    # [B*T*H]
+        x = F.dropout(x,p=0.3)
         q = self.Qw(x)  
         k = self.Kw(x)
         v = self.Vw(x)
         attn = torch.bmm(q / self.out_size**0.5, k.transpose(1,2))  # [B*T*T]
         attn = F.softmax(attn,dim=-1)
-        res = F.dropout(attn.bmm(v), p=0.5)  # [B*T*H]
+        res = F.dropout(attn.bmm(v), p=0.3)  # [B*T*H]
         output = self.linear(res)
         if self.if_res:
             output += res
@@ -59,7 +60,7 @@ class Last_Atten(nn.Module):
             nn.Linear(self.out_size,self.out_size),
             nn.ReLU(),
             nn.Linear(self.out_size,self.out_size),
-            nn.Dropout(0.5)
+            nn.Dropout(0.3)
         )
         # self.layernorm = nn.LayerNorm(self.out_size,eps=1e-6)
 
@@ -89,20 +90,20 @@ class BiLSTM(nn.Module):
         # self.rnn = nn.LSTM(in_size,hidden_size,n_layers,bidirectional=True)
         self.atten = nn.Sequential(
             # nn.Dropout(0.5),
-            Attention(in_size,128),
-            Attention(128,128,True),
-            Attention(128,128,True),
-            Attention(128,128,True),
-            Last_Atten(128,64)
+            Attention(in_size,96,True),
+            Attention(96,128,True),
+            Attention(128,196,True),
+            # Attention(128,96),
+            Last_Atten(196,256)
         )
         self.posibility_predict = nn.Sequential(
-            nn.Linear(64,64),
+            nn.Linear(256,64),
             nn.PReLU(),
             nn.Linear(64,1),
             nn.Sigmoid()
         )
         self.rul_predict = nn.Sequential(
-            nn.Linear(64,128),
+            nn.Linear(256,128),
             nn.PReLU(),
             nn.Linear(128,rul_size),
             nn.ReLU()
@@ -124,13 +125,13 @@ class RULProdict():
     def __init__(self):
         self.hidden_size = 128
         self.epochs = 200
-        self.batch_size = 128
+        self.batch_size = 96
         self.lr = 1e-3
         self.optimizer = optim.Adam
         self.max_data_len = 32*7
         self.feature_size = 64
-        self.position_encoding_size = 1
-        self.network = BiLSTM(self.feature_size,self.hidden_size,self.position_encoding_size,n_layers=2).cuda()
+        self.position_encoding_size = 8
+        self.network = BiLSTM(self.feature_size + self.position_encoding_size,self.hidden_size,1).cuda()
         self.rul_decoder = torch.load('PositionDecoder.pkl')
         self.rul_decoder.eval()
 
@@ -175,7 +176,7 @@ class RULProdict():
         # temp_rul = np.sin(temp_rul * np.pi / 2 / 5000)
 
         # pe = np.sin(temp_rul / 3500 * np.pi - np.pi/2).reshape([-1,1])
-        pe = (1 - np.exp(-temp_rul / 250)).reshape([-1,1])
+        pe = (1 - np.exp(-temp_rul / 500)).reshape([-1,1])
         # pe = np.zeros([temp_rul.shape[0], 12])
         # for i,x in enumerate(temp_rul):
         #     pe[i,:] = Bin_Encoder(min(2**12-1,round(x)),12)
@@ -220,7 +221,7 @@ class RULProdict():
             
             temp_one_feature = np.vstack(temp_one_feature_list)
             # temp_one_feature = temp_one_data.reshape([temp_one_data.shape[0],-1])
-            # temp_one_feature = self._position_encoding(temp_one_feature)
+            temp_one_feature = self._position_encoding(temp_one_feature)
             feature_dataset.append([bearing_name[i],temp_one_feature,state,posibility,rul,rul_encoding])
 
         feature_dataset.save()
@@ -287,7 +288,6 @@ class RULProdict():
                 # real_rul = (torch.asin(real_rul) + math.pi/2) / math.pi * 10000
                 # output = torch.cat([output,real_rul],dim=1)
                 one_result_list.append(output.data.cpu().numpy())
-
             result.append(np.concatenate(one_result_list))
 
         with open('rul_target.pkl', 'wb') as f:
@@ -302,12 +302,12 @@ class RULProdict():
         for i in range(6,-1,-1):
             temp_GCD = limitlen // (2**i)
             if temp_GCD > 0:
-                temp_idx = np.arange(temp_GCD,max(-1,temp_GCD-32),-1)
+                temp_idx = np.arange(temp_GCD,max(-1,temp_GCD-64),-1)
                 temp_data = indata[temp_idx[::-1]*(2**i) + startidx,:]
-                temp_data = np.concatenate([temp_data,np.zeros([32-temp_data.shape[0],temp_data.shape[1]])],axis=0)
+                temp_data = np.concatenate([temp_data,np.zeros([64-temp_data.shape[0],temp_data.shape[1]])],axis=0)
                 data.append(temp_data)
             else:
-                temp_data = np.zeros([32,indata.shape[1]])
+                temp_data = np.zeros([64,indata.shape[1]])
                 data.append(temp_data)
                 # idx.append(temp_idx[::-1]*(2**i))
 
@@ -329,7 +329,7 @@ class RULProdict():
             train_num[x] += 1
 
         for i,x in enumerate(train_num):
-            random_end = np.random.randint(round(train_iter[0][i].shape[0]*0.7), train_iter[0][i].shape[0], size=x)
+            random_end = np.random.randint(round(train_iter[0][i].shape[0]*0.5), train_iter[0][i].shape[0], size=x)
             random_start = np.random.randint(0,round(train_iter[0][i].shape[0]*0.1), size=x)
             random_len = random_end - random_start
             for j in range(random_len.shape[0]):
@@ -422,7 +422,8 @@ class RULProdict():
         posibility_loss = torch.mean(-torch.log(output[:,0]))
         posibility_repeat = output[:,0].view(-1,1).repeat(1,self.position_encoding_size)
         predict_rul = posibility_repeat * output[:,1:] + (1-posibility_repeat) * batch_rul_encoding
-        rul_encoding_loss = nn.functional.mse_loss(predict_rul,batch_rul_encoding)
+        # rul_encoding_loss = nn.functional.mse_loss(predict_rul,batch_rul_encoding)
+        rul_encoding_loss = nn.functional.mse_loss(output[:,1:],batch_rul_encoding)
         # rul_encoding_loss = torch.mean(torch.sum((predict_rul-batch_rul_encoding)**2,dim=1))
         # rul_encoding_square = output[:,1:]**2
         # rul_encoding_selfloss = Variable(torch.ones([rul_encoding_square.size(0), int(rul_encoding_square.size(1)/2)])).cuda() \
@@ -430,7 +431,7 @@ class RULProdict():
         # rul_encoding_selfloss = torch.mean(rul_encoding_selfloss**2)
 
         # rul_encoding_loss = torch.mean(torch.sum((output[:,1:] - batch_rul_encoding)**2,dim=1) * output[:,0].view(-1))
-        cal_loss = 1 * posibility_loss + rul_encoding_loss
+        cal_loss = 0 * posibility_loss + rul_encoding_loss
 
         # real_rul = self.rul_decoder(output[:,1:]).data.cpu().numpy()
         # real_rul = np.arcsin(real_rul) + np.pi/2
