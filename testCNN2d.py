@@ -14,32 +14,39 @@ class RUL_Net(nn.Module):
     def __init__(self,out_size):
         super(RUL_Net,self).__init__()
         self.cnn = nn.Sequential(
-            nn.Conv2d(7,16,5,1,2),
+            nn.Conv2d(7,16,11,1,5),
+            nn.ReLU(),
+            nn.Conv2d(16,16,11,1,5),
+            # nn.BatchNorm2d(16),
             nn.ReLU(),
             nn.AvgPool2d(2),
-            nn.Conv2d(16,16,5,1,2),
-            nn.BatchNorm2d(16),
+            nn.Conv2d(16,32,7,1,3),
+            # nn.BatchNorm2d(32),
             nn.ReLU(),
             nn.AvgPool2d(2),
-            nn.Conv2d(16,32,3,1,1),
-            nn.BatchNorm2d(32),
+            nn.Conv2d(32,48,3,1,1),
+            # nn.BatchNorm2d(48),
             nn.ReLU(),
             nn.AvgPool2d(2),
-            nn.Conv2d(32,32,3,1,1),
-            nn.BatchNorm2d(32),
+            nn.Conv2d(48,64,3,1,1),
+            # nn.BatchNorm2d(64),
             nn.ReLU(),
-            nn.AvgPool2d((2,3)),
+            nn.AvgPool2d(2),
+            nn.Conv2d(64,64,3,1,1),
+            # nn.BatchNorm2d(64),
+            nn.ReLU(),
         )
         self.FC = nn.Sequential(
-            nn.Dropout(0.5),
-            nn.Linear(32*4*3,32),
+            # nn.Dropout(0.5),
+            nn.Linear(64*4*5,64,bias=False),
             nn.ReLU(),
             nn.Dropout(0.5),
-            nn.Linear(32,out_size),
+            nn.Linear(64,out_size),
             nn.ReLU()
         )
 
     def forward(self,x):
+        x = nn.functional.dropout2d(x)
         x = self.cnn(x)
         x = x.view(x.size(0),-1)
         x = self.FC(x)
@@ -47,13 +54,13 @@ class RUL_Net(nn.Module):
 
 class RULPredict():
     def __init__(self):
-        self.epochs = 300
+        self.epochs = 200
         self.batches = 20
-        self.batch_size = 8
-        self.lr = 5e-4
+        self.batch_size = 16
+        self.lr = 2e-3
         self.optimizer = optim.Adam
         self.rul_size = 1
-        self.position_encoding_size = 8
+        self.position_encoding_size = 16
         self.network = RUL_Net(self.rul_size).cuda()
 
     def _preprocess(self, dataset, select):
