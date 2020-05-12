@@ -14,34 +14,29 @@ class RUL_Net(nn.Module):
     def __init__(self,out_size):
         super(RUL_Net,self).__init__()
         self.cnn = nn.Sequential(
-            nn.Conv2d(7,16,11,1,5),
-            nn.ReLU(),
-            nn.Conv2d(16,16,11,1,5),
-            # nn.BatchNorm2d(16),
+            nn.Conv2d(7,64,11,1,5),
             nn.ReLU(),
             nn.AvgPool2d(2),
-            nn.Conv2d(16,32,7,1,3),
-            # nn.BatchNorm2d(32),
+            nn.Conv2d(64,64,7,1,3),
             nn.ReLU(),
             nn.AvgPool2d(2),
-            nn.Conv2d(32,48,3,1,1),
-            # nn.BatchNorm2d(48),
+            # nn.Dropout2d(),
+            nn.Conv2d(64,128,5,1,2),
+            nn.BatchNorm2d(128),
             nn.ReLU(),
             nn.AvgPool2d(2),
-            nn.Conv2d(48,64,3,1,1),
-            # nn.BatchNorm2d(64),
+            # nn.Dropout2d(),
+            nn.Conv2d(128,128,3,1,1),
+            nn.BatchNorm2d(128),
             nn.ReLU(),
             nn.AvgPool2d(2),
-            nn.Conv2d(64,64,3,1,1),
-            # nn.BatchNorm2d(64),
-            nn.ReLU(),
         )
         self.FC = nn.Sequential(
             # nn.Dropout(0.5),
-            nn.Linear(64*4*5,64,bias=False),
+            nn.Linear(128*4*9,256,bias=False),
             nn.ReLU(),
             nn.Dropout(0.5),
-            nn.Linear(64,out_size),
+            nn.Linear(256,out_size),
             nn.ReLU()
         )
 
@@ -52,16 +47,71 @@ class RUL_Net(nn.Module):
         x = self.FC(x)
         return x
 
+class RUL_Net2(nn.Module):
+    def __init__(self):
+        super(RUL_Net2,self).__init__()
+        self.cnn = nn.Sequential(
+            nn.Conv1d(7*64,128,1,bias=False),
+            # nn.Conv1d(256, 128, 5),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+            nn.Conv1d(128,128, 3,1,1),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+            nn.Conv1d(128,256,3,1,1),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+            nn.Conv1d(256,256,3,1,1),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.MaxPool1d(2)
+
+            # nn.Conv3d(7*64,256,1,bias=False),
+            # nn.BatchNorm3d(256),
+            # nn.ReLU(),
+            # nn.Conv3d(256,256,[1,3,3]),
+            # nn.BatchNorm3d(256),
+            # nn.ReLU(),
+            # nn.Conv3d(256,512,[1,3,3]),
+            # nn.BatchNorm3d(512),
+            # nn.ReLU(),
+        )
+        self.FC = nn.Sequential(
+            nn.Linear(512*4,512),
+            nn.ReLU(),
+            nn.Dropout(),
+            nn.Linear(512,1),
+            nn.ReLU()
+        )
+        self.Atten = nn.Linear(128,1)
+
+    def forward(self, x):
+        x = x.view(x.size(0),7*64,-1)
+        atten = self.Atten(x)
+        atten = nn.functional.softmax(atten,dim=2)
+        atten = atten.view(atten.size(0),7*64,1).repeat([1,1,x.size(2)])
+        x = x*atten
+
+        # x = x.view(x.size(0),7*64,4,5,5)
+        x = self.cnn(x)
+        x = x.view(x.size(0),-1)
+        x = self.FC(x)
+        return x
+
 class RULPredict():
     def __init__(self):
-        self.epochs = 200
-        self.batches = 20
-        self.batch_size = 16
-        self.lr = 2e-3
+        self.epochs = 1000
+        self.batches = 50
+        self.batch_size = 32
+        self.lr = 3e-4
         self.optimizer = optim.Adam
         self.rul_size = 1
         self.position_encoding_size = 16
-        self.network = RUL_Net(self.rul_size).cuda()
+        # self.network = RUL_Net(self.rul_size).cuda()
+        self.network = RUL_Net2().cuda()
 
     def _preprocess(self, dataset, select):
         if select == 'train':
@@ -113,8 +163,8 @@ class RULPredict():
             log['val_loss'].append(float(val_loss[0]))
             log['val_rul_loss'].append(float(val_loss[1]))
             pd.DataFrame(log).to_csv('./model/log.csv',index=False)
-            # if float(val_loss) == min(log['train_loss']):
-            #     torch.save(self.network, './model/rul_model')
+            if float(val_loss[0]) == min(log['val_loss']):
+                torch.save(self.network, './model/best_rul_model')
             torch.save(self.network, './model/newest_rul_model')
 
     def _fit(self, train_iter, optimizer):
@@ -128,8 +178,8 @@ class RULPredict():
             train_num[x] += 1
 
         for i,x in enumerate(train_num):
-            random_end = np.random.randint(round(train_iter[0][i].shape[0]*0.7), round(train_iter[0][i].shape[0]*1.0), size=x)
-            random_start = np.random.randint(0,round(train_iter[0][i].shape[0]*0.2), size=x)
+            random_end = np.random.randint(round(train_iter[0][i].shape[0]*0.5), round(train_iter[0][i].shape[0]*1.0), size=x)
+            random_start = np.random.randint(0,round(train_iter[0][i].shape[0]*0.4), size=x)
             random_len = random_end - random_start
             for j in range(random_len.shape[0]):
                 one_feed_data = self._get_one_feed_data(train_iter[0][i], random_start[j], random_len[j])
@@ -187,6 +237,7 @@ class RULPredict():
 
     def _custom_loss(self, output, batch_rul_encoding, batch_rul):
         rul_encoding_loss = nn.functional.mse_loss(output, batch_rul_encoding)
+        # rul_encoding_loss = torch.mean((output - batch_rul_encoding)**2 * ((1-batch_rul_encoding)*0.5+0.5))
         real_rul_mse = 0
         return rul_encoding_loss, real_rul_mse
 
@@ -233,10 +284,11 @@ class RULPredict():
                 position[0:temp_idx.shape[0]] = temp_idx[::-1]*(2**i)
                 temp_data = indata[temp_idx[::-1]*(2**i) + startidx,:]
                 temp_data = np.concatenate([temp_data,np.zeros([64-temp_data.shape[0],temp_data.shape[1]])],axis=0)
-                temp_data = self._position_encoding(temp_data,position)
+                # temp_data = self._position_encoding(temp_data,position)
                 data.append(temp_data.reshape([1,1,64,-1]))
             else:
-                temp_data = np.zeros([1,1,64,indata.shape[1]+self.position_encoding_size])
+                # temp_data = np.zeros([1,1,64,indata.shape[1]+self.position_encoding_size])
+                temp_data = np.zeros([1,1,64,indata.shape[1]])
                 data.append(temp_data)
                 # idx.append(temp_idx[::-1]*(2**i))
 
