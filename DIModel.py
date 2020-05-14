@@ -213,11 +213,14 @@ class STFTDecoder(nn.Module):
         )
         self.CNN = nn.Sequential(
             # nn.Conv2d(256,96,1),
-            nn.ConvTranspose2d(256,96,5),
-            nn.BatchNorm2d(96),
+            nn.ConvTranspose2d(256,196,3),
+            nn.BatchNorm2d(196),
+            nn.ReLU(),
+            nn.ConvTranspose2d(196,128,3),
+            nn.BatchNorm2d(128),
             nn.ReLU(),
             # nn.UpsamplingBilinear2d(scale_factor=2),
-            nn.ConvTranspose2d(96,64,3,2),
+            nn.ConvTranspose2d(128,64,3,2),
             nn.BatchNorm2d(64),
             nn.ReLU(),
             # nn.UpsamplingBilinear2d(scale_factor=2),
@@ -243,18 +246,121 @@ class STFTDIModel(nn.Module):
         self.encoder = STFTEncoder(self.fea_size)
         self.decoder = STFTDecoder(self.fea_size)
 
-    def forward(self, x_s, x_t):
+    def forward(self, x_s, x_t, x_s_label, x_t_label, label_all):
         x_s_fea = self.encoder(x_s)
         x_t_fea = self.encoder(x_t)
 
         out = self.decoder(x_s_fea, x_t_fea)
+
+        kl_loss = torch.zeros(1).cuda()
+        for i in range(label_all):
+            for j in range(label_all):
+                if i!=j:
+                    temp_fea_1 = torch.cat([x_s_fea[x_s_label==i],x_t_fea[x_t_label==i]],dim=0)
+                    temp_fea_2 = torch.cat([x_s_fea[x_s_label==j],x_t_fea[x_t_label==j]],dim=0)
+                    kl_loss += nn.functional.kl_div(temp_fea_1.log(),temp_fea_2)
+        kl_loss /= label_all*(label_all-1)
+        return out, kl_loss
+
+class STFTUnet(nn.Module):
+    def __init__(self):
+        super(STFTUnet, self).__init__()
+        self.encoder_CNN_1 = nn.Sequential(
+            nn.Conv2d(2,32,4,2),
+            nn.BatchNorm2d(32),
+            nn.ReLU()
+        )
+        self.encoder_CNN_2 = nn.Sequential(
+            nn.Conv2d(32,64,4,2),
+            nn.BatchNorm2d(64),
+            nn.ReLU()
+        )
+        self.encoder_CNN_3 = nn.Sequential(
+            nn.Conv2d(64,96,3,2),
+            nn.BatchNorm2d(96),
+            nn.ReLU()
+        )
+        self.encoder_CNN_4 = nn.Sequential(
+            nn.Conv2d(96,128,5),
+            nn.BatchNorm2d(128),
+            nn.Tanh()
+        )
+        self.decoder_CNN_4 = nn.Sequential(
+            nn.ConvTranspose2d(128,96,5),
+            nn.BatchNorm2d(96),
+            nn.ReLU()
+        )
+        self.decoder_CNN_3 = nn.Sequential(
+            nn.ConvTranspose2d(96*2,64,3,2),
+            nn.BatchNorm2d(64),
+            nn.ReLU()
+        )
+        self.decoder_CNN_2 = nn.Sequential(
+            nn.ConvTranspose2d(64*2,32,4,2),
+            nn.BatchNorm2d(32),
+            nn.ReLU()
+        )
+        self.decoder_CNN_1 = nn.Sequential(
+            nn.ConvTranspose2d(32*2,2,4,2),
+            nn.BatchNorm2d(2),
+            nn.ReLU()
+        )
+
+    def forward(self, x_source, x_t_fea):
+        x_fea_1 = self.encoder_CNN_1(x_source)
+        x_fea_2 = self.encoder_CNN_2(x_fea_1)
+        x_fea_3 = self.encoder_CNN_3(x_fea_2)
+        x_fea_4 = self.encoder_CNN_4(x_fea_3)
+
+        # out = torch.cat([x_t_fea,x_fea_4],dim=1)
+        out = x_fea_4 * x_t_fea
+        out = self.decoder_CNN_4(out)
+        out = torch.cat([out, x_fea_3],dim=1)
+        out = self.decoder_CNN_3(out)
+        out = torch.cat([out, x_fea_2],dim=1)
+        out = self.decoder_CNN_2(out)
+        out = torch.cat([out, x_fea_1],dim=1)
+        out = self.decoder_CNN_1(out)
+
         return out
+
+class STFTEncoder2(nn.Module):
+    def __init__(self):
+        super(STFTEncoder2,self).__init__()
+        self.CNN = nn.Sequential(
+            nn.Conv2d(2,32,4,2),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Conv2d(32,64,4,2),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64,96,3,2),
+            nn.BatchNorm2d(96),
+            nn.ReLU(),
+            nn.Conv2d(96,128,5),
+            nn.BatchNorm2d(128),
+            nn.Softmax()
+        )
+    def forward(self, x):
+        return self.CNN(x)
+
+class STFTDIModel2(nn.Module):
+    def __init__(self):
+        super(STFTDIModel2,self).__init__()
+        self.encoder = STFTEncoder2()
+        self.Unet = STFTUnet()
+
+    def forward(self, x_source, x_target):
+        x_t_fea = self.encoder(x_target)
+        x_trans = self.Unet(x_source, x_t_fea)
+        return x_trans
+
 
 class Process():
     def __init__(self):
         self.dataset = DataSet.load_dataset(name = 'phm_data')
         self.lr = 2e-3
-        self.epochs = 500
+        self.epochs = 1500
         self.batches = 50
         self.batch_size = 32
         self.train_bearings = ['Bearing1_1','Bearing1_2','Bearing2_1','Bearing2_2','Bearing3_1','Bearing3_2']
@@ -266,8 +372,9 @@ class Process():
         train_data = self._preprocess('train')
         test_data = self._preprocess('test')
         # net = DIModel().cuda()
-        net = STFTDIModel(128).cuda()
+        # net = STFTDIModel(128).cuda()
         # net = TimeDIModel().cuda()
+        net = STFTDIModel2().cuda()
         optimizer = optim.Adam(net.parameters(), lr=self.lr)
         for e in range(1, self.epochs+1):
             train_loss = [0,0]
@@ -283,9 +390,9 @@ class Process():
                 train_idx_p = []
                 label_count = 0
                 for i,x in enumerate(train_num):
-                    temp_idx = np.random.randint(0,train_data[i].shape[0],size=[x,2])
-                    train_idx.append(np.min(temp_idx,axis=1))
-                    train_idx_p.append(np.max(temp_idx,axis=1))
+                    temp_idx = np.random.randint(0,train_data[i].shape[0]-1,size=x)
+                    train_idx.append(temp_idx)
+                    train_idx_p.append(temp_idx+1)
 
                     # append_idx = np.random.randint(0,train_data[i].shape[0]-1,size=x)
                     # train_idx.append(append_idx)
@@ -313,9 +420,9 @@ class Process():
                 test_idx_p = []
                 label_count = 0
                 for i,x in enumerate(test_num):
-                    temp_idx = np.random.randint(0,train_data[i].shape[0],size=[x,2])
-                    test_idx.append(np.min(temp_idx,axis=1))
-                    test_idx_p.append(np.max(temp_idx,axis=1))
+                    temp_idx = np.random.randint(0,test_data[i].shape[0]-1,size=x)
+                    test_idx.append(temp_idx)
+                    test_idx_p.append(temp_idx+1)
 
                     # append_idx = np.random.randint(0,test_data[i].shape[0],size=x)
                     # test_idx.append(append_idx)
@@ -354,10 +461,13 @@ class Process():
         train_idx_p = []
         label_count = 0
         for i,x in enumerate(train_num):
-            append_idx = np.random.randint(0,train_data[i].shape[0]-2,size=x)
-            train_idx.append(append_idx)
-            append_idx_p = np.random.randint(0,train_data[i].shape[0],size=x)
-            train_idx_p.append(append_idx_p)
+            temp_idx = np.random.randint(0,train_data[i].shape[0]-1,size=x)
+            train_idx.append(temp_idx)
+            train_idx_p.append(temp_idx+1)
+            # append_idx = np.random.randint(0,train_data[i].shape[0]-2,size=x)
+            # train_idx.append(append_idx)
+            # append_idx_p = np.random.randint(0,train_data[i].shape[0],size=x)
+            # train_idx_p.append(append_idx_p)
             batch_s_label[label_count:label_count+self.batch_size//len(train_data)] = i
             batch_t_label[label_count:label_count+self.batch_size//len(train_data)] = i
             label_count += x
@@ -404,7 +514,7 @@ class Process():
 
         # output = model(train_iter[0],train_iter[1],label_iter[0],label_iter[1],label_all)
         output = model(train_iter[0],train_iter[1])
-        # loss = torch.nn.functional.mse_loss(output[0],train_iter[0]) + torch.nn.functional.mse_loss(output[1],train_iter[1]) + 2e-3* output[2]
+        # loss = torch.nn.functional.mse_loss(output[0],train_iter[0]) + 2e-3* output[1]
         loss = torch.nn.functional.mse_loss(output,train_iter[1])
         optimizer.zero_grad()
         loss.backward()
@@ -424,7 +534,7 @@ class Process():
             label_iter[i] = Variable(torch.from_numpy(label_iter[i].copy()).type(torch.FloatTensor)).cuda()
 
         # output = model(test_iter[0],test_iter[1],label_iter[0],label_iter[1],label_all)
-        # loss = torch.nn.functional.mse_loss(output[0],test_iter[0]) + torch.nn.functional.mse_loss(output[1],test_iter[1]) + 2e-3* output[2]
+        # loss = torch.nn.functional.mse_loss(output[0],test_iter[0]) +  2e-3* output[1]
         output = model(test_iter[0],test_iter[1])
         loss = torch.nn.functional.mse_loss(output,test_iter[1])
         torch.cuda.empty_cache()        #empty useless variable
@@ -438,7 +548,7 @@ class Process():
             test_iter[i] = Variable(torch.from_numpy(test_iter[i].copy()).type(torch.FloatTensor)).cuda() 
             label_iter[i] = Variable(torch.from_numpy(label_iter[i].copy()).type(torch.FloatTensor)).cuda()
 
-        # output = model(test_iter[0],test_iter[1],label_iter[0],label_iter[1],label_all)
+        # output,_ = model(test_iter[0],test_iter[1],label_iter[0],label_iter[1],label_all)
         output = model(test_iter[0],test_iter[1])
         
         # output = np.concatenate([output[0].data.cpu().numpy(), output[1].data.cpu().numpy()],axis=0)
@@ -524,6 +634,7 @@ class Process():
         # pe = np.sin(temp_rul / 3500 * np.pi - np.pi/2).reshape([-1,1])
         # pe = (1 - np.exp(-temp_rul / 500)).reshape([-1,1])
         pe = (np.log10(temp_rul+1)).reshape([-1,1])
+        # pe = (-np.log10(temp_rul+1)+3).reshape([-1,1])
         # pe = np.zeros([temp_rul.shape[0], 12])
         # for i,x in enumerate(temp_rul):
         #     pe[i,:] = Bin_Encoder(min(2**12-1,round(x)),12)
@@ -541,4 +652,4 @@ if __name__ == "__main__":
     torch.backends.cudnn.enabled=False
     p = Process()
     p.train()
-    p._GenFeature('20200512encoder')
+    p._GenFeature('20200513encoder')

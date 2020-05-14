@@ -5,14 +5,14 @@ from torch import nn, optim
 from torch.autograd import Variable
 import torch.nn.functional as F
 from dataset import DataSet
-from DIModel import Encoder, ResBlock
+from DIModel import Encoder, ResBlock, TimeEncoder
 import pickle
 import pandas as pd
 from collections import OrderedDict
 import math
-from testdecoder import PositionDecoder
-from rul_encoder import RUL_Decoder, RUL_Encoder
-from binTransfer import Bin_Encoder, Bin_Decoder
+# from testdecoder import PositionDecoder
+# from rul_encoder import RUL_Decoder, RUL_Encoder
+# from binTransfer import Bin_Encoder, Bin_Decoder
 
 class Attention(nn.Module):
     def __init__(self, in_size, out_size, if_res=False):
@@ -28,18 +28,18 @@ class Attention(nn.Module):
             nn.Linear(self.out_size,self.out_size),
             nn.ReLU(),
             nn.Linear(self.out_size,self.out_size),
-            nn.Dropout(0.3)
+            nn.Dropout(0.5)
         )
 
     def forward(self, x):
         x = x.transpose(0,1)    # [B*T*H]
-        x = F.dropout(x,p=0.3)
+        # x = F.dropout(x,p=0.3)
         q = self.Qw(x)  
         k = self.Kw(x)
         v = self.Vw(x)
         attn = torch.bmm(q / self.out_size**0.5, k.transpose(1,2))  # [B*T*T]
         attn = F.softmax(attn,dim=-1)
-        res = F.dropout(attn.bmm(v), p=0.3)  # [B*T*H]
+        res = F.dropout(attn.bmm(v), p=0.5)  # [B*T*H]
         output = self.linear(res)
         if self.if_res:
             output += res
@@ -60,7 +60,7 @@ class Last_Atten(nn.Module):
             nn.Linear(self.out_size,self.out_size),
             nn.ReLU(),
             nn.Linear(self.out_size,self.out_size),
-            nn.Dropout(0.3)
+            nn.Dropout(0.5)
         )
         # self.layernorm = nn.LayerNorm(self.out_size,eps=1e-6)
 
@@ -89,22 +89,23 @@ class BiLSTM(nn.Module):
         self.hidden_size = hidden_size
         # self.rnn = nn.LSTM(in_size,hidden_size,n_layers,bidirectional=True)
         self.atten = nn.Sequential(
-            # nn.Dropout(0.5),
-            Attention(in_size,96,True),
-            Attention(96,128,True),
-            Attention(128,196,True),
-            # Attention(128,96),
-            Last_Atten(196,256)
+            Attention(in_size,128,True),
+            Attention(128,128,True),
+            # Attention(96,128,True),
+            # Attention(128,128,True),
+            Attention(128,128,True),
+            Last_Atten(128,128)
         )
         self.posibility_predict = nn.Sequential(
-            nn.Linear(256,64),
+            nn.Linear(128,64),
             nn.PReLU(),
             nn.Linear(64,1),
             nn.Sigmoid()
         )
         self.rul_predict = nn.Sequential(
-            nn.Linear(256,128),
-            nn.PReLU(),
+            nn.Linear(128,128),
+            nn.ReLU(),
+            nn.Dropout(),
             nn.Linear(128,rul_size),
             nn.ReLU()
         )
@@ -121,19 +122,24 @@ class BiLSTM(nn.Module):
 
         return output
 
+# class RegLSTM(nn.Module):
+#     def __init__(self):
+#         super(RegLSTM,self).__init__()
+
+
 class RULProdict():
     def __init__(self):
         self.hidden_size = 128
-        self.epochs = 200
-        self.batch_size = 96
-        self.lr = 1e-3
+        self.epochs = 2000
+        self.batch_size = 64
+        self.lr = 1e-4
         self.optimizer = optim.Adam
         self.max_data_len = 32*7
-        self.feature_size = 64
+        self.feature_size = 128
         self.position_encoding_size = 8
-        self.network = BiLSTM(self.feature_size + self.position_encoding_size,self.hidden_size,1).cuda()
-        self.rul_decoder = torch.load('PositionDecoder.pkl')
-        self.rul_decoder.eval()
+        self.network = BiLSTM(self.feature_size+self.position_encoding_size,self.hidden_size,1).cuda()
+        # self.rul_decoder = torch.load('PositionDecoder.pkl')
+        # self.rul_decoder.eval()
 
     def _preprocess(self, dataset, select):
         if select == 'train':
@@ -213,26 +219,32 @@ class RULProdict():
             length_data = temp_one_data.shape[2]
             temp_one_data = (temp_one_data - np.repeat(np.min(temp_one_data, axis=2, keepdims=True),length_data,axis=2)) \
                 / np.repeat((np.max(temp_one_data,axis=2,keepdims=True) - np.min(temp_one_data,axis=2,keepdims=True)),length_data,axis=2)
+            # temp_one_data = temp_one_data*2-1
             temp_one_data = Variable(torch.from_numpy(temp_one_data.copy()).type(torch.FloatTensor)).cuda() 
 
             temp_one_feature_list = []
             for j in range(temp_one_data.shape[0]//64+1):
-                temp_one_feature_list.append(feature_net(temp_one_data[j*64:min(j*64+64,temp_one_data.shape[0]-1)]).data.cpu().numpy())
+                _,_,temp_one_fea = feature_net(temp_one_data[j*64:min(j*64+64,temp_one_data.shape[0]-1)])
+                temp_one_feature_list.append(temp_one_fea.data.cpu().numpy())
             
             temp_one_feature = np.vstack(temp_one_feature_list)
             # temp_one_feature = temp_one_data.reshape([temp_one_data.shape[0],-1])
-            temp_one_feature = self._position_encoding(temp_one_feature)
+            # temp_one_feature = self._position_encoding(temp_one_feature)
             feature_dataset.append([bearing_name[i],temp_one_feature,state,posibility,rul,rul_encoding])
 
         feature_dataset.save()
 
-    def _position_encoding(self, data):
+    def _position_encoding(self, data, position = None):
         pe = np.zeros([data.shape[0], self.position_encoding_size])
-        position = np.arange(0, data.shape[0]).reshape([-1,1])
+        if isinstance(position,np.ndarray):
+            position = position.reshape([-1,1])
+        else:
+            position = np.arange(0, data.shape[0]).reshape([-1,1])
         div_term = np.exp(np.arange(0, self.position_encoding_size, 2) *
                              -(np.log(10000.0) / self.position_encoding_size))
         pe[:, 0::2] = np.sin(position * div_term)
         pe[:, 1::2] = np.cos(position * div_term)
+        pe[(position==-1).reshape([-1,]),:] = 0
         return np.concatenate([data,pe],axis=1)
 
     def Begin(self):
@@ -299,10 +311,12 @@ class RULProdict():
     def _get_one_feed_data(self, indata, startidx, limitlen):
         data = []
         limitlen = limitlen
+        position = -np.ones([64*7])
         for i in range(6,-1,-1):
             temp_GCD = limitlen // (2**i)
             if temp_GCD > 0:
                 temp_idx = np.arange(temp_GCD,max(-1,temp_GCD-64),-1)
+                position[(6-i)*64:(6-i)*64+temp_idx.shape[0]] = temp_idx[::-1]*(2**i)
                 temp_data = indata[temp_idx[::-1]*(2**i) + startidx,:]
                 temp_data = np.concatenate([temp_data,np.zeros([64-temp_data.shape[0],temp_data.shape[1]])],axis=0)
                 data.append(temp_data)
@@ -312,6 +326,7 @@ class RULProdict():
                 # idx.append(temp_idx[::-1]*(2**i))
 
         data = np.concatenate(data,axis=0)
+        data = self._position_encoding(data,position)
         # idx = np.concatenate(idx,axis=0)
         return data
 
@@ -324,13 +339,13 @@ class RULProdict():
         batch_rul_encoding = []
         batch_sequence_len = []
 
-        train_num = [self.batch_size//len(train_iter)]*len(train_iter)
-        for x in random.sample(range(0,len(train_iter)),self.batch_size % len(train_iter)):
+        train_num = [self.batch_size//len(train_iter[0])]*len(train_iter[0])
+        for x in random.sample(range(0,len(train_iter[0])),self.batch_size % len(train_iter[0])):
             train_num[x] += 1
 
         for i,x in enumerate(train_num):
-            random_end = np.random.randint(round(train_iter[0][i].shape[0]*0.5), train_iter[0][i].shape[0], size=x)
-            random_start = np.random.randint(0,round(train_iter[0][i].shape[0]*0.1), size=x)
+            random_end = np.random.randint(round(train_iter[0][i].shape[0]*0.7), round(train_iter[0][i].shape[0]*1), size=x)
+            random_start = np.random.randint(0,round(train_iter[0][i].shape[0]*0.2), size=x)
             random_len = random_end - random_start
             for j in range(random_len.shape[0]):
                 one_feed_data = self._get_one_feed_data(train_iter[0][i], random_start[j], random_len[j])
@@ -368,6 +383,7 @@ class RULProdict():
         loss, state_loss, rul_loss = self._custom_loss(output, batch_state, batch_posibility, batch_rul_encoding, batch_rul)
         loss.backward()
         optimizer.step()
+        torch.cuda.empty_cache()        #empty useless variable
         return loss.data, state_loss.data, rul_loss
 
     def _evaluate(self, test_iter):
@@ -379,8 +395,8 @@ class RULProdict():
         batch_rul_encoding = []
         batch_sequence_len = []
 
-        train_num = [self.batch_size//len(test_iter)]*len(test_iter)
-        for x in random.sample(range(0,len(test_iter)),self.batch_size % len(test_iter)):
+        train_num = [self.batch_size//len(test_iter[0])]*len(test_iter[0])
+        for x in random.sample(range(0,len(test_iter[0])),self.batch_size % len(test_iter[0])):
             train_num[x] += 1
 
         for i,x in enumerate(train_num):
@@ -411,19 +427,29 @@ class RULProdict():
         loss, state_loss, rul_loss = self._custom_loss(output, batch_state, batch_posibility, batch_rul_encoding, batch_rul)
         return loss, state_loss.data, rul_loss
 
-    def _cal_real_rul(self, rul_encoding_tensor):
-        real_rul = self.rul_decoder(rul_encoding_tensor).data.cpu().numpy()
-        real_rul = np.arcsin(real_rul) + np.pi/2
-        real_rul = real_rul/np.pi * 10000
-        return real_rul.reshape([-1])
+    # def _cal_real_rul(self, rul_encoding_tensor):
+    #     real_rul = self.rul_decoder(rul_encoding_tensor).data.cpu().numpy()
+    #     real_rul = np.arcsin(real_rul) + np.pi/2
+    #     real_rul = real_rul/np.pi * 10000
+    #     return real_rul.reshape([-1])
 
     def _custom_loss(self,output, batch_state, batch_posibility, batch_rul_encoding, batch_rul):
         # posibility_loss = torch.mean(torch.cos(output[:,0]*math.pi/2))
-        posibility_loss = torch.mean(-torch.log(output[:,0]))
-        posibility_repeat = output[:,0].view(-1,1).repeat(1,self.position_encoding_size)
-        predict_rul = posibility_repeat * output[:,1:] + (1-posibility_repeat) * batch_rul_encoding
+        # posibility_loss = torch.mean(-torch.log(output[:,0]))
+        # posibility_repeat = output[:,0].view(-1,1).repeat(1,self.position_encoding_size)
+        # predict_rul = posibility_repeat * output[:,1:] + (1-posibility_repeat) * batch_rul_encoding
         # rul_encoding_loss = nn.functional.mse_loss(predict_rul,batch_rul_encoding)
-        rul_encoding_loss = nn.functional.mse_loss(output[:,1:],batch_rul_encoding)
+        # rul_encoding_loss = nn.functional.mse_loss(output[:,1:],batch_rul_encoding)
+        # sgn = torch.sign(output[:,1:] - batch_rul_encoding)
+        # rul_encoding_loss = torch.mean((output[:,1:] - batch_rul_encoding)**abs(sgn-3) * ((1-batch_rul_encoding)*0.5+0.5))
+        rul_encoding_loss = torch.mean((output[:,1:] - batch_rul_encoding)**2)
+
+        posibility_loss = nn.functional.mse_loss(((batch_rul_encoding - output[:,1:]) / (output[:,1:]+1e-6)),output[:,0])
+
+        l2_loss = Variable(torch.zeros(1)).cuda()
+        for name, param in self.network.named_parameters():
+            if 'bias' not in name:
+                l2_loss += torch.norm(param)
         # rul_encoding_loss = torch.mean(torch.sum((predict_rul-batch_rul_encoding)**2,dim=1))
         # rul_encoding_square = output[:,1:]**2
         # rul_encoding_selfloss = Variable(torch.ones([rul_encoding_square.size(0), int(rul_encoding_square.size(1)/2)])).cuda() \
@@ -431,7 +457,7 @@ class RULProdict():
         # rul_encoding_selfloss = torch.mean(rul_encoding_selfloss**2)
 
         # rul_encoding_loss = torch.mean(torch.sum((output[:,1:] - batch_rul_encoding)**2,dim=1) * output[:,0].view(-1))
-        cal_loss = 0 * posibility_loss + rul_encoding_loss
+        cal_loss = 0 * posibility_loss + rul_encoding_loss + 1e-4*l2_loss
 
         # real_rul = self.rul_decoder(output[:,1:]).data.cpu().numpy()
         # real_rul = np.arcsin(real_rul) + np.pi/2
@@ -450,6 +476,6 @@ class RULProdict():
 if __name__ == "__main__":
     torch.backends.cudnn.enabled=False
     p = RULProdict()
-    # p._GenFeature('20200425encoder')
+    # p._GenFeature('20200427encoder')
     p.Begin()
     p.test_all('test')
