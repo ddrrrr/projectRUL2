@@ -6,3 +6,10 @@ test.pkl
 __pycache__/dataset.cpython-37.pyc
 __pycache__/DIModel.cpython-37.pyc
 refrence/qian2014.pdf
+20200411encoder.pkl
+20200413encoder_452.pkl
+20200413encoder.pkl
+rul_result.pkl
+rul_target.pkl
+model/*
+fig/*
