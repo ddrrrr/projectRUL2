@@ -97,7 +97,7 @@ class CDC(nn.Module):
         for i in range(1,self.timestep+1):
             encode_samples[i-1] = z[:,t_samples+i,:].view(batch,self.fea_size)
         forward_seq = z[:,:t_samples+1,:]
-        output,h = self.gru(forward_seq,torch.zeros(1, batch_size, self.rnn_hidden_size).cuda())
+        output,h = self.gru(forward_seq,torch.zeros(1, self.batch_size, self.rnn_hidden_size).cuda())
         c_t = output[:,t_samples,:].view(batch,self.rnn_hidden_size)
         pred = torch.empty((self.timestep, batch, self.fea_size)).float()
         for i in range(self.timestep):
@@ -176,6 +176,7 @@ class Process():
         return fft_data
 
     def _cal_one_batch(self, data_iter, isTrain=False, opti=None):
+        train_idx = [1299,688,459,179,300,1200]
         if isTrain:
             self.network.train()
         else:
@@ -187,7 +188,10 @@ class Process():
         batch_data = []
         data_len = data_iter[0].shape[-1]
         for i,x in enumerate(each_data_num):
-            temp_idx = np.random.randint(0,data_iter[i].shape[0]-self.seq_len,size=x)
+            if isTrain:
+                temp_idx = np.random.randint(train_idx[i],data_iter[i].shape[0]-self.seq_len,size=x)
+            else:
+                temp_idx = np.random.randint(0,data_iter[i].shape[0]-self.seq_len,size=x)
             for one_idx in temp_idx:
                 batch_data.append(data_iter[i][one_idx:one_idx+self.seq_len,:,:].reshape([1,2,self.seq_len,data_len]))
         batch_data = np.concatenate(batch_data, axis=0)
@@ -213,7 +217,7 @@ class Process():
         for i in range(len(bearing_data)):
             temp_one_data = bearing_data[i]
             temp_one_rul = np.arange(temp_one_data.shape[0])[::-1] + bearing_rul[i]
-            pe = (np.log10(temp_one_rul+1)).reshape([-1,1])
+            pe = (np.exp(temp_one_rul+1)).reshape([-1,1])
             temp_one_data = Variable(torch.from_numpy(temp_one_data.copy()).type(torch.FloatTensor)).cuda() 
             temp_one_feature_list = []
             for j in range(temp_one_data.shape[0]//64+1):
@@ -230,4 +234,4 @@ if __name__ == "__main__":
     torch.backends.cudnn.enabled=False
     p = Process()
     p.Begin()
-    p._gen_feature('20200529encoder')
+    p._gen_feature('20200530encoder')
