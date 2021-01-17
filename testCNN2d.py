@@ -14,34 +14,37 @@ class RUL_Net(nn.Module):
     def __init__(self,out_size):
         super(RUL_Net,self).__init__()
         self.cnn = nn.Sequential(
-            nn.Conv2d(7,64,11,1,5),
+            nn.Conv2d(7,16,1,bias=False),
+            nn.Conv2d(16,32,4,2),
+            nn.BatchNorm2d(32),
             nn.ReLU(),
-            nn.AvgPool2d(2),
-            nn.Conv2d(64,64,7,1,3),
+            # nn.AvgPool2d(2),
+            nn.Conv2d(32,64,3,2),
+            nn.BatchNorm2d(64),
             nn.ReLU(),
-            nn.AvgPool2d(2),
+            # nn.AvgPool2d(2),
             # nn.Dropout2d(),
-            nn.Conv2d(64,128,5,1,2),
+            nn.Conv2d(64,128,3,2),
             nn.BatchNorm2d(128),
             nn.ReLU(),
-            nn.AvgPool2d(2),
+            # nn.AvgPool2d(2),
             # nn.Dropout2d(),
-            nn.Conv2d(128,128,3,1,1),
-            nn.BatchNorm2d(128),
+            nn.Conv2d(128,256,[3,4]),
+            nn.BatchNorm2d(256),
             nn.ReLU(),
-            nn.AvgPool2d(2),
+            # nn.AvgPool2d(2),
         )
         self.FC = nn.Sequential(
             # nn.Dropout(0.5),
-            nn.Linear(128*4*9,256,bias=False),
+            nn.Linear(256,128,bias=False),
             nn.ReLU(),
             nn.Dropout(0.5),
-            nn.Linear(256,out_size),
+            nn.Linear(128,out_size),
             nn.ReLU()
         )
 
     def forward(self,x):
-        x = nn.functional.dropout2d(x)
+        # x = nn.functional.dropout2d(x)
         x = self.cnn(x)
         x = x.view(x.size(0),-1)
         x = self.FC(x)
@@ -103,15 +106,15 @@ class RUL_Net2(nn.Module):
 
 class RULPredict():
     def __init__(self):
-        self.epochs = 1000
+        self.epochs = 200
         self.batches = 50
         self.batch_size = 32
-        self.lr = 3e-4
+        self.lr = 1e-3
         self.optimizer = optim.Adam
         self.rul_size = 1
-        self.position_encoding_size = 16
-        # self.network = RUL_Net(self.rul_size).cuda()
-        self.network = RUL_Net2().cuda()
+        self.position_encoding_size = 8
+        self.network = RUL_Net(self.rul_size).cuda()
+        # self.network = RUL_Net2().cuda()
 
     def _preprocess(self, dataset, select):
         if select == 'train':
@@ -277,18 +280,18 @@ class RULPredict():
         data = []
         limitlen = limitlen
         for i in range(6,-1,-1):
-            position = -np.ones([64])
+            position = -np.ones([32])
             temp_GCD = limitlen // (2**i)
             if temp_GCD > 0:
-                temp_idx = np.arange(temp_GCD,max(-1,temp_GCD-64),-1)
+                temp_idx = np.arange(temp_GCD,max(-1,temp_GCD-32),-1)
                 position[0:temp_idx.shape[0]] = temp_idx[::-1]*(2**i)
                 temp_data = indata[temp_idx[::-1]*(2**i) + startidx,:]
-                temp_data = np.concatenate([temp_data,np.zeros([64-temp_data.shape[0],temp_data.shape[1]])],axis=0)
-                # temp_data = self._position_encoding(temp_data,position)
-                data.append(temp_data.reshape([1,1,64,-1]))
+                temp_data = np.concatenate([temp_data,np.zeros([32-temp_data.shape[0],temp_data.shape[1]])],axis=0)
+                temp_data = self._position_encoding(temp_data,position)
+                data.append(temp_data.reshape([1,1,32,-1]))
             else:
-                # temp_data = np.zeros([1,1,64,indata.shape[1]+self.position_encoding_size])
-                temp_data = np.zeros([1,1,64,indata.shape[1]])
+                temp_data = np.zeros([1,1,32,indata.shape[1]+self.position_encoding_size])
+                # temp_data = np.zeros([1,1,32,indata.shape[1]])
                 data.append(temp_data)
                 # idx.append(temp_idx[::-1]*(2**i))
 
